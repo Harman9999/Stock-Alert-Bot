@@ -55,6 +55,8 @@ from database import (
     save_news_analysis,
     set_user_style,
     upsert_news_article,
+    set_guild_news_settings,
+    get_guild_news_settings,
 )
 
 load_dotenv()
@@ -1043,12 +1045,81 @@ async def profile_style_command(
 
 
 news_group = app_commands.Group(name="news", description="Enable or disable AI-filtered market news")
+@news_group.command(
+    name="settings",
+    description="Customize AI news settings for this server"
+)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def news_settings(
+    interaction: discord.Interaction,
+    importance: app_commands.Range[int, 1, 10],
+    polling: app_commands.Range[int, 1, 60],
+    daily_limit: app_commands.Range[int, 1, 100]
+) -> None:
+
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "Use this command inside a Discord server.",
+            ephemeral=True
+        )
+        return
+
+    guild_id = interaction.guild.id
+
+    settings = await asyncio.to_thread(
+        get_guild_news_settings,
+        guild_id
+    )
+
+    if settings is None:
+        await interaction.response.send_message(
+            "Enable news first using /news enable.",
+            ephemeral=True
+        )
+        return
+
+    await asyncio.to_thread(
+        set_guild_news_settings,
+        guild_id,
+        importance,
+        polling,
+        daily_limit
+    )
+
+    embed = discord.Embed(
+        title="⚙️ News Settings Updated",
+        color=discord.Color.green()
+    )
+
+    embed.add_field(
+        name="Importance Threshold",
+        value=f"{importance}/10",
+        inline=False
+    )
+
+    embed.add_field(
+        name="Polling Interval",
+        value=f"{polling} minute(s)",
+        inline=False
+    )
+
+    embed.add_field(
+        name="Daily AI Limit",
+        value=f"{daily_limit} articles",
+        inline=False
+    )
+
+    await interaction.response.send_message(
+        embed=embed,
+        ephemeral=True
+    )
 
 
 @news_group.command(
     name="enable",
     description="Enable important AI-filtered news in a specific channel.",
 )
+@app_commands.checks.has_permissions(manage_guild=True)
 @app_commands.describe(
     channel="The channel where AI news should be posted."
 )
@@ -1068,6 +1139,10 @@ async def news_enable(
         interaction.guild.id,
         channel.id,
     )
+    settings = await asyncio.to_thread(
+        get_guild_news_settings,
+        interaction.guild.id
+    )
 
     embed = discord.Embed(
         title="📰 AI News Enabled",
@@ -1080,20 +1155,20 @@ async def news_enable(
 
     embed.add_field(
         name="Importance Threshold",
-        value=f"{NEWS_IMPORTANCE_THRESHOLD}/10",
-        inline=True,
+        value=f"{settings['importance_threshold']}/10",
+        inline=True
     )
 
     embed.add_field(
         name="Polling Interval",
-        value=f"Every {NEWS_POLL_MINUTES} minute(s)",
-        inline=True,
+        value=f"{settings['polling_interval']} minute(s)",
+        inline=True
     )
 
     embed.add_field(
         name="Daily AI Limit",
-        value=f"{NEWS_MAX_AI_ARTICLES_PER_DAY} article(s)",
-        inline=True,
+        value=f"{settings['daily_ai_limit']} articles",
+        inline=True
     )
 
     embed.set_footer(
