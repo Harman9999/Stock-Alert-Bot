@@ -49,6 +49,9 @@ def initialize_database() -> None:
                 guild_id INTEGER PRIMARY KEY,
                 channel_id INTEGER NOT NULL,
                 enabled INTEGER NOT NULL DEFAULT 1,
+                importance_threshold INTEGER NOT NULL DEFAULT 8,
+                polling_interval INTEGER NOT NULL DEFAULT 1,
+                daily_ai_limit INTEGER NOT NULL DEFAULT 100,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -82,6 +85,27 @@ def initialize_database() -> None:
             );
             """
         )
+
+        # Add missing columns to existing databases
+        columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(news_settings)"
+            )
+        }
+
+        additions = {
+            "importance_threshold": "INTEGER NOT NULL DEFAULT 8",
+            "polling_interval": "INTEGER NOT NULL DEFAULT 1",
+            "daily_ai_limit": "INTEGER NOT NULL DEFAULT 100",
+            "updated_at": "TEXT",
+        }
+
+        for column, definition in additions.items():
+            if column not in columns:
+                connection.execute(
+                    f"ALTER TABLE news_settings ADD COLUMN {column} {definition}"
+                )
         connection.commit()
 
 
@@ -302,3 +326,46 @@ def record_ai_usage(articles_analyzed: int, requests_made: int,
             (today, articles_analyzed, requests_made, input_tokens, output_tokens),
         )
         connection.commit()
+
+def set_guild_news_settings(
+    guild_id: int,
+    importance: int,
+    polling: int,
+    daily_limit: int
+) -> None:
+
+    if not 1 <= importance <= 10:
+        raise ValueError("Importance must be 1-10")
+
+    if not 1 <= polling <= 60:
+        raise ValueError("Polling must be 1-60 minutes")
+
+    if not 1 <= daily_limit <= 100:
+        raise ValueError("Daily limit must be 1-100")
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE news_settings
+            SET importance_threshold=?,
+                polling_interval=?,
+                daily_ai_limit=?,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE guild_id=?
+            """,
+            (importance, polling, daily_limit, guild_id)
+        )
+        connection.commit()
+
+
+def get_guild_news_settings(guild_id: int):
+    with get_connection() as connection:
+        return connection.execute(
+            """
+            SELECT *
+            FROM news_settings
+            WHERE guild_id=?
+            """,
+            (guild_id,)
+        ).fetchone()
+    
