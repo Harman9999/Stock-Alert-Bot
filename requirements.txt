@@ -4,3 +4,4 @@ openai
 python-dotenv
 feedparser>=6.0.11
 httpx>=0.27.0
+flask
