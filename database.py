@@ -83,6 +83,12 @@ def initialize_database() -> None:
                 input_tokens INTEGER NOT NULL DEFAULT 0,
                 output_tokens INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS guild_ai_articles (
+                guild_id INTEGER NOT NULL,
+                article_id TEXT NOT NULL,
+                usage_date TEXT NOT NULL,
+                PRIMARY KEY (guild_id, article_id)
+            );
             """
         )
 
@@ -368,4 +374,36 @@ def get_guild_news_settings(guild_id: int):
             """,
             (guild_id,)
         ).fetchone()
+        
+def record_guild_ai_article(
+    guild_id: int,
+    article_id: str,
+    daily_limit: int
+) -> bool:
+
+    with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+
+        row = connection.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM guild_ai_articles
+            WHERE guild_id=? AND usage_date=date('now')
+            """,
+            (guild_id,)
+        ).fetchone()
+
+        if row["total"] >= daily_limit:
+            return False
+
+        cursor = connection.execute(
+            """
+            INSERT OR IGNORE INTO guild_ai_articles
+            (guild_id, article_id, usage_date)
+            VALUES (?, ?, date('now'))
+            """,
+            (guild_id, article_id)
+        )
+
+        return cursor.rowcount == 1
     
