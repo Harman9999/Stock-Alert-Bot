@@ -57,6 +57,7 @@ from database import (
     upsert_news_article,
     set_guild_news_settings,
     get_guild_news_settings,
+    record_guild_ai_article,
 )
 
 load_dotenv()
@@ -129,11 +130,11 @@ class StockAlertBot(discord.Client):
         if not crypto_alert_checker.is_running():
             crypto_alert_checker.start()
         if not market_news_checker.is_running():
-            market_news_checker.change_interval(minutes=NEWS_POLL_MINUTES)
             market_news_checker.start()
 
 
 bot = StockAlertBot()
+last_news_poll = {}
 
 
 def get_latest_stock_price(ticker: str) -> float:
@@ -1373,7 +1374,7 @@ async def before_crypto_alert_checker() -> None:
     await bot.wait_until_ready()
 
 
-@tasks.loop(minutes=5)
+@tasks.loop(minutes=1)
 async def market_news_checker() -> None:
     channels = await asyncio.to_thread(get_enabled_news_channels)
     if not channels:
@@ -1419,11 +1420,9 @@ async def market_news_checker() -> None:
             logger.info("AI analyzed article %s with score %s", aid, result["importance"])
 
     by_id = {item["id"]: item for item in candidates}
-
+    checked_guilds = set()
     for aid, analysis in analyses.items():
         importance = int(analysis["importance"])
-        if importance < NEWS_IMPORTANCE_THRESHOLD:
-            continue
         article = by_id.get(aid)
         if article is None:
             continue
@@ -1451,6 +1450,50 @@ async def market_news_checker() -> None:
         for setting in channels:
             guild_id = int(setting["guild_id"])
             channel_id = int(setting["channel_id"])
+        
+            settings = await asyncio.to_thread(
+                get_guild_news_settings,
+                guild_id
+            )
+        
+            # Read the user's polling interval
+            polling_interval = int(settings["polling_interval"])
+        
+            # Get the current time
+            now = datetime.now(timezone.utc)
+        
+            # Get the last time this server checked
+            last_poll = last_news_poll.get(guild_id)
+        
+            # Skip this server if its interval hasn't passed
+            if last_poll is not None:
+                if now - last_poll < timedelta(minutes=polling_interval):
+                    continue
+        
+            # Remember which servers are due for a check
+            checked_guilds.add(guild_id)
+
+            # Read the daily limit the user entered
+            daily_ai_limit = int(settings["daily_ai_limit"])
+
+            # Check whether this server has reached its limit
+            allowed = await asyncio.to_thread(
+                record_guild_ai_article,
+                guild_id,
+                aid,
+                daily_ai_limit
+            )
+
+            if not allowed:
+                continue
+
+            # Read the importance threshold
+            importance_threshold = int(settings["importance_threshold"])
+        
+            # Use that number
+            if importance < importance_threshold:
+                continue
+        
             if await asyncio.to_thread(has_news_been_sent, guild_id, aid):
                 continue
             channel = bot.get_channel(channel_id)
@@ -1467,6 +1510,9 @@ async def market_news_checker() -> None:
                 logger.warning("Missing Send Messages or Embed Links in %s", channel_id)
             except discord.HTTPException:
                 logger.exception("Discord failed to send news")
+    # Start cooldowns after processing all articles
+    for guild_id in checked_guilds:
+        last_news_poll[guild_id] = datetime.now(timezone.utc)
 
 
 @market_news_checker.before_loop
